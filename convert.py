@@ -17,6 +17,7 @@ entries = "entrylist-%d.html"
 # Change this into the WP image URL pattern for the photos that you
 # have bulk-uploaded. "username", "yyyy" and "mm" need to be changed.
 wp_image_url = "http://username.files.wordpress.com/yyyy/mm/%s.jpg"
+wp_url = "https://username.wordpress.com"
 
 # Change this into your Ameblo login, name and e-mail
 authorLogin = 'ameblo-username'
@@ -27,17 +28,54 @@ authorEmail = 'author-email@example.com'
 categories = set()
 articles = []
 
+class Comment:
+    id = 100
+
+    def __init__(self, author, content, dt):
+        self.id = Comment.id
+        self.author = author
+        self.content = content
+        self.dt = dt
+        self.author_url = None
+
+        Comment.id = Comment.id + 1
+
+    def __unicode__(self):
+        return u"Comment by %s (%s) on %s" % (self.author, self.author_url, self.dt)
+
+    def __str__(self):
+        return unicode(self).encode('utf-8')
+
 class Article:
     def __init__(self, title):
         self.title = title
         self.content = None
         self.dt = datetime.now()
         self.category = None
+        self.comments = []
+
+    def addComment(self, c):
+        author_element = c.find(class_='commentAuthor')
+        author = author_element.string
+
+        content = c.find('div', class_='commentBody')
+
+        dt = c.find('span', class_='commentTime').find('time').string
+        dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+
+        comment = Comment(author, content, dt)
+        if 'ownerComment' in c['class']:
+            comment.author_url = wp_url
+        elif author_element.name == 'a':
+            comment.author_url = author_element['href']
+
+        self.comments.append(comment)
 
 def addArticle(title, url):
     page = urllib2.urlopen(url)
     soup = BeautifulSoup(page, 'lxml')
     article = soup.find('article')
+    aside = soup.find('aside')
 
     if article:
         a = Article(title)
@@ -70,6 +108,14 @@ def addArticle(title, url):
             # Replace image source with WP URL
             img['src'] = wp_image_url % eid
             e.replace_with(img)
+
+        # Collect comments
+        if aside:
+            comments = aside.find('ul', class_='commentList')
+
+            if comments:
+                for c in comments.find_all('div', class_='blogComment'):
+                    a.addComment(c)
 
         articles.append(a)
 
@@ -161,6 +207,27 @@ for article in articles:
         category = E.category(domain="category", nicename=article.category)
         category.text = etree.CDATA(article.category)
         item.append(category)
+
+    if len(article.comments):
+        for c in article.comments:
+            content = nsWp.comment_content()
+            content.text = etree.CDATA(c.content.decode_contents())
+
+            author = nsWp.comment_author()
+            author.text = etree.CDATA(c.author)
+
+            comment = nsWp.comment(
+                    nsWp.comment_id(str(c.id)),
+                    author,
+                    nsWp.comment_date(c.dt.strftime("%Y-%m-%d %H:%M:%S")),
+                    content,
+                    nsWp.comment_approved("1")
+                    )
+
+            if c.author_url:
+                comment.append(nsWp.comment_author_url(c.author_url))
+
+            item.append(comment)
 
     rss.find('channel').append(item)
 
